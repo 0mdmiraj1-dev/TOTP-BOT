@@ -1,0 +1,29 @@
+{
+  "name": "personal-vault",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx src/local.ts",
+    "build": "tsc --noEmit && esbuild src/recover.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/recover.mjs && esbuild src/browser.ts --bundle --minify --platform=browser --format=esm --outfile=public/app.js && esbuild src/offline.ts --bundle --minify --platform=browser --format=iife --outfile=public/recovery.js",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run build && npm test",
+    "recover": "tsx src/recover.ts",
+    "test:ui": "node scripts/ui-smoke.mjs"
+  },
+  "dependencies": {
+    "csv-parse": "^6.1.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "playwright-core": "^1.64.1",
+    "prettier": "^3.9.10",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

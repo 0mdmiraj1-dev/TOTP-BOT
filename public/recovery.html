@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Offline vault recovery</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="recovery.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="brand"><span class="logo">▣</span> still · Recovery</div>
+      <section class="auth">
+        <div class="eyebrow">Independent of Telegram</div>
+        <h1>Your backup. Your key.</h1>
+        <p class="muted">
+          This page decrypts on your device. It makes no network requests. Save
+          recovery.html, recovery.js and style.css together, then open
+          recovery.html offline.
+        </p>
+        <form>
+          <label for="backup">Encrypted backup</label
+          ><input id="backup" type="file" accept=".json" required /><label
+            for="key"
+            >Recovery key</label
+          ><input id="key" type="password" autocomplete="off" required /><button
+            class="primary"
+          >
+            Decrypt & preview locally
+          </button>
+        </form>
+        <p id="result" role="status"></p>
+        <p class="small muted">
+          Plaintext exports contain passwords and TOTP seeds. This tool never
+          restores Telegram bindings or sessions. Node.js recovery is available
+          if your browser does not support local Web Crypto.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
