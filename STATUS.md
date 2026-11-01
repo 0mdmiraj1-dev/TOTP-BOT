@@ -1,30 +1,28 @@
-# Delivery status
+# Status — 2026-11-01
 
-## Completed
+## Implemented
 
-- TypeScript vault service; exactly one initialized account; recovery acknowledgement; independent vault UUID and one active numeric Telegram binding.
-- Authenticated encryption, password/recovery wrappers, self-contained backups; masked listing, reveal, CRUD, favorites, search, hostname grouping, pagination and TOTP refresh.
-- CSV/OneCloud/otpauth import parsing, validation, preview, duplicate policies and one-revision bulk commit; explicit manual password/2FA links.
-- Durable single-machine local development coordinator, session revocation/generation, throttling, idempotency, partial-failure publication/delivery state and explicit retries.
-- Telegram API transport and signed pin/file discovery; Bots.Business native commands with authenticated sender provenance; HTTPS sensitive forms.
-- Dark mobile web UI; offline browser recovery and hidden-input Node.js recovery CLI; Vercel configuration and exact operator instructions.
-- Fail-closed Vercel mode. No hidden database or production bypass.
+- Production Neon/PostgreSQL coordinator: pre-seeded singleton, row locking across instances, encrypted state, durable auth/session generation and throttling, no automatic transaction-body replay, explicit fail-closed errors.
+- Outbox claim → remote immutable effect → fenced receipt; expiring leases, idempotent mutations, monotonic authoritative published reference, encrypted snapshot upload/publication/private-delivery statuses, advisory pins, bounded pending jobs/ciphertext cache and retained channel history.
+- Production environment validation, real database health check, signed Telegram sender/Mini App authorization, server-side logout/expiry, rebind/recovery revocation and old callback rejection.
+- Existing password/TOTP UI, import/preview/duplicate/link/restore/encryption/offline recovery modules retained. Four complete bot command files and copy-ready BOTS_BUSINESS_COMMANDS.md.
+- Exact Bengali operator checklist SETUP_BN.md, SQL migration, environment example, Vercel daily authenticated worker, migration and read-only Telegram diagnostics scripts.
 
-## Tested here
+## Executed tests
 
-`npm run check`: TypeScript build plus **26 passing tests** (unit and mocked integration). Covers SHA1/SHA256/SHA512 RFC vectors, boundary/leading-zero behavior, CSV multiline/BOM/malformed limits, OneCloud validation/defaults, duplicate policies, wrong password/recovery key, tampering/schema rejection, setup gate, unauthorized access, throttle, logout/expiry, rebind/generation, password recovery, idempotent/concurrent saves, publication failure after upload, delivery failure, restore identity isolation, encrypted local cold-start state/process exclusivity, HMAC/freshness, opaque stale callbacks, HTTP fail-closed behavior, Telegram adapter failure handling and CLI recovery without old environment.
+- `npm run check`: TypeScript/build plus **27 passing unit/mocked integration tests**.
+- `TEST_DATABASE_URL=<disposable local PostgreSQL> npm run test:postgres`: **10 passing real PostgreSQL 17 integration tests**, separate connections and mocked Telegram. Covers concurrent setup/save, same-request retries, cold-start logout/expiry/throttling, rebind/old callbacks, upload-then-manifest failure, private-delivery failure, expired worker rejection after a newer revision, generation-fenced pending delivery, wrong keys/missing/unavailable state and signed-initData HTTP production flows.
+- `npm run test:ui`: real Chromium mobile UI with **explicit local Telegram simulation**; setup/ack/add/reveal/edit/backup/lock/login/layout and recovery with networking disabled after page loading. File:// was blocked by this environment; a local-file launch is not claimed verified.
 
-`npm run test:ui`: real headless Chromium, mobile viewport, synthetic local account and **explicit simulated Telegram transport**. Setup/acknowledgement, add/reveal/edit preserving password, encrypted backup download, lock/login, responsive overflow check, and browser recovery after disabling networking. No browser page errors in this smoke flow. The environment blocks file:// navigation; a direct double-click/file:// launch was not verified.
+## Sources and cost
 
-## Untested / documentation gaps
+Selected **Neon PostgreSQL Free**, no card: currently $0, 100 CU-hours/month/project, 1 GB DB storage/project and 5 GB public transfer. Optional Launch is usage-priced, not authorized/provisioned. Free quota exhaustion can suspend/fail operations; stay on Free and monitor Console usage. Official pricing/plans, PostgreSQL/node-postgres transaction/TLS docs, Telegram Bot API/Mini Apps/ID conversion and Vercel limits/cron docs were read. BB references were read from its official documentation repository. Full references and trust model are in ARCHITECTURE.md.
 
-- No live Telegram, Bots.Business, OneCloud-exporter or Vercel integration; no deployment occurred. No webhook was changed.
-- Official Bots.Business docs were read from its official GitHub repository. Official Telegram Bot API and Vercel implementation/runtime references were read from their repositories. Hosted official Telegram Mini Apps documentation and current Vercel platform/plan limits could not be read because network policy denied access and the web tool failed. Their current capabilities are not claimed verified.
-- Real Mini App initData/launch interoperability, Bots.Business property installation/runtime context, HMAC exact-byte forwarding, Telegram channel privileges and pin discovery require live verification with synthetic data.
-- Browser copy/clipboard permissions, every accessibility combination, native Telegram client variants and large-vault performance were not exhaustively tested. The UI smoke is not a penetration test or crypto audit.
+## Operator steps still required / not tested live
 
-## Blocked
+- Create the user's Neon Free project, run sql/001-coordinator.sql and privately configure DATABASE_URL + other Vercel variables.
+- Install four Bots.Business commands and bot-scoped String properties; add bot to private channel with Post/Edit rights; configure BotFather menu.
+- Redeploy on Vercel, confirm /api health, initialize inside Telegram, save/ack recovery key and run synthetic import/backup/new-account rebind/expiry acceptance checks.
+- Actual Neon cloud TLS/pooling, BB exact-byte forwarding, live Telegram permissions/uploads/manifests/private delivery, real Mini App clients and Vercel cron remain unverified. The user's live URL could not be accessed from the tools.
 
-Production setup, login, reads, mutation and server-side logout/revocation stay disabled because the requested stack has no verified durable serialization/security-state component. Merely deploying this code will not produce an operational production vault. The channel remains the encrypted snapshot/history store, but a durable transactional coordinator is required for safe ordering and security state. A production adapter and its crash/fencing/distributed tests are not implemented pending that architecture decision.
-
-The single architecture question: **May a small durable transactional coordinator be added for serialized security state and publication jobs, while keeping encrypted vault snapshots/history in Telegram?**
+No paid service/cloud project was provisioned, production secret requested in chat, or bot webhook changed. Production adapter is implemented and locally tested; this is not a claim that the user's live service is already operational.

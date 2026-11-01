@@ -3,7 +3,8 @@ const root = document.querySelector("#app")!;
 const launch = new URLSearchParams(location.hash.slice(1));
 let initData = launch.get("tgWebAppData") ?? "";
 // Telegram launch data is validated server-side; never use initDataUnsafe.
-if (initData) history.replaceState(null, "", location.pathname);
+if (initData)
+  history.replaceState(null, "", location.pathname + location.search);
 let session = "",
   records: any[] = [],
   revision = 0,
@@ -12,7 +13,11 @@ let session = "",
   favorites = false,
   page = 0,
   status: any = {},
-  mode = "login",
+  mode = ["setup", "rebind", "recover-password"].includes(
+    new URLSearchParams(location.search).get("view") ?? "",
+  )
+    ? new URLSearchParams(location.search).get("view")!
+    : "login",
   busy = false;
 const codes = new Map<
   string,
@@ -139,7 +144,7 @@ function shell(content: string) {
 }
 function auth() {
   shell(
-    `<section class="auth"><div class="eyebrow">A little peace of mind</div><h1>${mode === "setup" ? "Create your private vault" : mode === "rebind" ? "Reconnect your vault" : mode === "recover-password" ? "Recover access" : "Welcome back."}</h1><p class="muted">${mode === "login" ? "Your passwords and one-time codes, together. Unlock to continue." : "Use this HTTPS form. Never send your master password or recovery key in chat."}</p>${status.writesEnabled === false ? '<div class="notice">Experimental channel mode. Authentication and writes are disabled until a durable coordinator is configured.</div>' : ""}<form id="auth-form">${mode === "setup" ? field("One-time setup token", "token", "", "password", true) : ""}${field("Vault username", "username", "", "text", true)}${mode !== "recover-password" ? field(mode === "setup" ? "Master password · at least 14 characters" : "Master password", "password", "", "password", true) : ""}${mode === "rebind" || mode === "recover-password" ? field("Recovery key", "recovery", "", "password", true) : ""}${mode === "recover-password" ? field("New master password · at least 14 characters", "newPassword", "", "password", true) : ""}${mode === "rebind" || mode === "recover-password" ? '<label class="check"><input name="confirm" type="checkbox" required> Revoke the old Telegram binding, sessions, and pending privileged actions.</label>' : ""}<button class="primary" type="submit">${mode === "login" ? "Unlock vault" : mode === "setup" ? "Create vault" : mode === "rebind" ? "Rebind Telegram account" : "Recover master password"}</button></form><div class="auth-links" id="auth-links"></div><p class="small muted">Have an encrypted backup? <a href="/recovery.html">Open standalone offline recovery</a></p>${status.localIdentity ? '<p class="notice">Local development · synthetic Telegram identity 10001. Use synthetic credentials only.</p>' : ""}</section>`,
+    `<section class="auth"><div class="eyebrow">A little peace of mind</div><h1>${mode === "setup" ? "Create your private vault" : mode === "rebind" ? "Reconnect your vault" : mode === "recover-password" ? "Recover access" : "Welcome back."}</h1><p class="muted">${mode === "login" ? "Your passwords and one-time codes, together. Unlock to continue." : "Use this HTTPS form. Never send your master password or recovery key in chat."}</p>${status.writesEnabled === false ? '<div class="notice">Vault unavailable. Check /api health and private server configuration before setup.</div>' : ""}<form id="auth-form">${mode === "setup" ? field("One-time setup token", "token", "", "password", true) : ""}${field("Vault username", "username", "", "text", true)}${mode !== "recover-password" ? field(mode === "setup" ? "Master password · at least 14 characters" : "Master password", "password", "", "password", true) : ""}${mode === "rebind" || mode === "recover-password" ? field("Recovery key", "recovery", "", "password", true) : ""}${mode === "recover-password" ? field("New master password · at least 14 characters", "newPassword", "", "password", true) : ""}${mode === "rebind" || mode === "recover-password" ? '<label class="check"><input name="confirm" type="checkbox" required> Revoke the old Telegram binding, sessions, and pending privileged actions.</label>' : ""}<button class="primary" type="submit">${mode === "login" ? "Unlock vault" : mode === "setup" ? "Create vault" : mode === "rebind" ? "Rebind Telegram account" : "Recover master password"}</button></form><div class="auth-links" id="auth-links"></div><p class="small muted">Have an encrypted backup? <a href="/recovery.html">Open standalone offline recovery</a></p>${status.localIdentity ? '<p class="notice">Local development · synthetic Telegram identity 10001. Use synthetic credentials only.</p>' : ""}</section>`,
   );
   for (const [id, label] of [
     ["login", "Sign in"],
@@ -248,7 +253,7 @@ async function mutate(action: string, body: any) {
 function render() {
   if (!session) return auth();
   shell(
-    `<section class="hero"><div class="eyebrow">Everything in its place</div><div class="row between wrap"><h1>Your digital essentials.</h1><button id="add" class="primary">＋ Add new</button></div><p class="muted">One quiet home for your passwords and 2FA.</p></section><div class="tabs"><button id="tab-password" class="${tab === "password" ? "active" : ""}">Passwords <span class="small">${records.filter((r) => r.type === "password").length}</span></button><button id="tab-totp" class="${tab === "totp" ? "active" : ""}">2FA codes <span class="small">${records.filter((r) => r.type === "totp").length}</span></button></div><div class="toolbar"><input class="search" id="search" aria-label="Search vault" placeholder="Search your vault…" value="${escape(query)}"><button id="favorites" class="${favorites ? "favorite" : ""}">☆ Favorites</button><button id="import">Import</button><button id="backup">Backup & restore</button></div><div id="cards" class="grid"></div><div id="pagination" class="pagination"></div>${status.simulatedTelegram ? '<div class="notice">Local Telegram simulation enabled. No channel files or private backups are sent.</div>' : ""}<div class="status"><span>● Vault saved · revision ${revision}</span><span>Channel: ${escape(status.channel)}</span><span>Private backup: ${escape(status.backup)}</span></div><div class="row"><button id="retry" class="plain">↻ Retry backup</button><a class="small" href="/recovery.html">Offline recovery</a></div>`,
+    `<section class="hero"><div class="eyebrow">Everything in its place</div><div class="row between wrap"><h1>Your digital essentials.</h1><button id="add" class="primary">＋ Add new</button></div><p class="muted">One quiet home for your passwords and 2FA.</p></section><div class="tabs"><button id="tab-password" class="${tab === "password" ? "active" : ""}">Passwords <span class="small">${records.filter((r) => r.type === "password").length}</span></button><button id="tab-totp" class="${tab === "totp" ? "active" : ""}">2FA codes <span class="small">${records.filter((r) => r.type === "totp").length}</span></button></div><div class="toolbar"><input class="search" id="search" aria-label="Search vault" placeholder="Search your vault…" value="${escape(query)}"><button id="favorites" class="${favorites ? "favorite" : ""}">☆ Favorites</button><button id="import">Import</button><button id="backup">Backup & restore</button></div><div id="cards" class="grid"></div><div id="pagination" class="pagination"></div>${status.simulatedTelegram ? '<div class="notice">Local Telegram simulation enabled. No channel files or private backups are sent.</div>' : ""}<div class="status"><span>● Vault saved · revision ${revision}</span><span>Channel: ${escape(status.channel)}</span><span>Private backup: ${escape(status.backup)}</span>${status.pendingBackups ? `<span>${status.pendingBackups} backup(s) pending · Retry to resume</span>` : ""}</div><div class="row"><button id="retry" class="plain">↻ Retry backup</button><a class="small" href="/recovery.html">Offline recovery</a></div>`,
   );
   el("#header-actions").append(
     button("Lock vault", async () => {

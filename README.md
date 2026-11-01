@@ -1,123 +1,98 @@
 # Still — personal Password + TOTP Vault
 
-A Node.js/TypeScript backend, mobile web vault, native Bots.Business menus, encrypted Telegram channel snapshots, portable encrypted backups, and offline recovery tools.
+A personal single-account vault with a TypeScript/Vercel backend, compact dark web interface, Bots.Business native menus, encrypted Telegram channel snapshots/history and independent offline recovery.
 
-**Status: experimental channel storage; production authentication and writes are disabled.** The requested platforms do not supply a verified atomic durable coordinator for account initialization, mutation ordering, revocation, throttling, replay protection, and publication jobs. No database has been added. A functional single-process **local development** implementation and independently usable recovery tools are provided. This is not a production-ready password manager. See [ARCHITECTURE.md](ARCHITECTURE.md) for the exact blocker, verified sources, and remaining documentation gaps.
+**Start here: [বাংলা exact setup checklist](SETUP_BN.md).** Target origin: `https://totpbot.vercel.app`. Complete bot code: [BOTS_BUSINESS_COMMANDS.md](BOTS_BUSINESS_COMMANDS.md). Design/source verification: [ARCHITECTURE.md](ARCHITECTURE.md). Executed checks and remaining operator work: [STATUS.md](STATUS.md).
 
-## Requirements and checks
+## Production coordinator
 
-Node.js 22+ and npm. Tested here with Node.js 24.19.0. Use synthetic credentials for development.
+Production uses **Neon PostgreSQL Free** (or compatible PostgreSQL) as a small durable coordinator. Encrypted channel snapshots remain in Telegram; Neon stores encrypted security state, sessions/revocation, throttling, request IDs, authoritative published references, bounded pending jobs and a latest encrypted snapshot cache. No plaintext records or recovery keys are stored there. Completed historical ciphertext remains in Telegram; its references stay in the coordinator.
+
+The adapter uses a pre-seeded singleton row and `SELECT ... FOR UPDATE` to serialize independent instances. It does not rely on process memory, Telegram pins or revision checks alone. Network effects are outside SQL transactions, with durable claim tokens and fenced receipts. Immutable manifests prevent a stale worker overwriting a newer revision. Pins are advisory and validated against the durable reference. The server remains fail-closed when config, schema, row, key or database availability is wrong.
+
+No cloud project, paid service or webhook was provisioned/changed by this implementation. Actual Neon/Vercel/Telegram installation is still an operator step. **Production adapter implemented and locally tested is not a claim of live deployment success.**
+
+## Requirements and tests
+
+Node.js 22+ and npm. Tested with Node.js 24.19.0. Synthetic credentials only in tests.
 
 ```sh
 npm ci
 npm run check
-```
-
-`check` type-checks, builds both interfaces and the recovery CLI, and runs unit/mocked integration tests. Browser verification additionally needs Chromium at `/usr/bin/chromium`:
-
-```sh
 npm run test:ui
 ```
 
-No Telegram, Bots.Business, Vercel credentials, or external services are needed for these tests. `STATUS.md` separates tested behavior from unverified integration.
+`check` runs TypeScript, builds static assets and recovery CLI, and runs 27 unit/mocked integration tests. `test:ui` uses Chromium at `/usr/bin/chromium` (change the smoke script path for another installation) and explicitly simulates Telegram. It covers setup/ack, CRUD/reveal/edit, backup download, lock/login, mobile layout and browser recovery with networking disabled after assets loaded.
 
-## Run the working local development vault
-
-1. Copy `.env.example` to `.env`. Generate **three independent** random values for `SERVER_KEY`, `SETUP_TOKEN`, and `BB_FORWARD_SECRET` using `openssl rand -hex 32` for each. Keep the setup token outside Telegram. Never commit `.env`.
-2. For synthetic local use set these additional values:
-
-   ```dotenv
-   STORAGE_MODE=local-development
-   APP_ORIGIN=http://127.0.0.1:3000
-   LOCAL_STATE_PATH=work/vault.local
-   LOCAL_MOCK_TELEGRAM=true
-   ```
-
-   Simulation displays an explicit notice and does not send any Telegram messages or files. To exercise actual Telegram transport locally, remove `LOCAL_MOCK_TELEGRAM` and configure `BOT_TOKEN` and `CHANNEL_ID`. Real calls have not been tested here. If Telegram is not configured, publication fails and subsequent writes stay blocked until the pending publication is resolved.
-3. Build and start, loading the environment with Node's dotenv loader:
-
-   ```sh
-   npm run build
-   node --env-file=.env --import tsx src/local.ts
-   ```
-
-4. Open `http://127.0.0.1:3000`. Choose **Initial setup**, enter the setup token, one username, and a unique master passphrase of at least 14 characters and eight distinct characters. Local development uses fixed synthetic Telegram identity `10001`, never a caller-selected identity.
-5. Copy/download the newly generated recovery key. Store it separately from backups, outside Telegram. Acknowledge storage to finish initialization. The key is shown once; it is not stored in plaintext and cannot be retrieved later. Setup stays closed even if acknowledgement is pending. Losing the key before acknowledgement cannot be fixed by reopening registration.
-6. Add records or import data, download an encrypted backup, and try standalone recovery with synthetic data before relying on the format.
-
-The encrypted local coordinator file is durable only on this machine. A process lease prevents a second server from opening it. Stop with Ctrl-C to release the lease. After a crash, confirm no server process remains, then manually remove only `work/vault.local.lockfile`. Never delete that lease while a server runs. Never run this mode in a cluster, on shared network storage, or in Vercel temporary storage. Losing `SERVER_KEY` loses local security/session state, but a downloaded backup remains recoverable with its recovery key.
-
-## Vercel configuration and blocked deployment
-
-The source includes `api/index.ts` and `vercel.json`: one Node function, static `public/`, a 60-second duration request, no-store responses, restrictive CSP, and `/api/bot` routing. Node support and plan-specific function limits must be checked in the actual Vercel project; current hosted documentation was inaccessible in this environment.
-
-1. Import this repository into Vercel. Select the Other framework preset, Node.js 22 or a supported newer version, build `npm run build`, output `public`. The checked-in configuration defines these commands.
-2. Configure environment variables from `.env.example` in Vercel's private settings. Use the exact HTTPS deployment origin in `APP_ORIGIN`, with no trailing slash. Set `STORAGE_MODE=experimental-channel`. Leave local-only settings absent.
-3. Deploy using Vercel's dashboard or `npx vercel` after configuring your account. This session **did not deploy** anything and no credentials were supplied. `GET /api` must report `writesEnabled:false`; sensitive operations return 503. Setting `STORAGE_MODE=local-development` cannot bypass that gate in `api/index.ts`.
-4. Do not put real vault contents into this deployment. A production coordinator must first be selected, implemented and verified. There is deliberately no unsafe environment switch that enables Telegram-only production writes.
-
-The smallest extra component is a durable transactional coordinator (one personal-vault state row plus a durable job/idempotency ledger is sufficient) with linearizable transactions or single-writer execution and durable fencing. Bulk encrypted documents remain in Telegram. The required interface is `Coordinator.run`; a production adapter also needs bounded external-effect scheduling and recovery as described in the architecture. A stub is not an implementation. No production adapter is bundled.
-
-## Telegram channel and webhook ownership
-
-Use a private bot chat and a **dedicated private channel**. Add the bot as a channel administrator with permission to post, edit its own manifest message, and pin messages. A bot is added to the channel; it does not log in to a channel. Configure the channel's numeric ID as `CHANNEL_ID`. Do not infer ownership from a Telegram username. Only one numeric Telegram sender is actively bound to the independent vault UUID.
-
-Reserve the channel's pinned-message slot for the signed manifest. Do not pin another message above it. Other admin changes, deleted pins/documents, or a missing/invalid manifest require operator recovery, never history scanning or a fallback to an arbitrary old document. The coordinator remains authoritative about intended current revision; the pin advertises completed channel publication. Telegram's Bot API is not a general channel history/search database.
-
-**Bots.Business owns all incoming bot updates.** Do not call `setWebhook`, `deleteWebhook`, or run polling from this backend. This project never changes webhook configuration. Importing into an existing Bots.Business bot can replace commands; export its current commands first. Setting up or migrating a real bot/webhook is an operator action and requires your explicit deployment decision.
-
-## Install Bots.Business commands
-
-1. Review the official repository format and HTTP caveats linked in `ARCHITECTURE.md`. The files in `bots-business/commands/` contain supported `/*CMD ... CMD*/` headers. Copy each command into the Bots.Business editor with **Wait for answer off**, empty Answer and Keyboard, or import `bots-business/` as a separate repository root using the documented Git importer. The monorepo root is not a Bots.Business repository root.
-2. Create `/start` (aliases `/home`, `/cancel`), `/vault`, `/vault-response`, and `/vault-error` from those files. No wildcard collects passwords or documents. Imports stay in HTTPS forms.
-3. In the private Bots.Business properties/editor, set bot-scoped string properties `vault:origin` to your exact HTTPS origin and `vault:forward_key` to the same independently generated value as `BB_FORWARD_SECRET`. Do not add a public configuration command. No master password, recovery key, DEK, or session bearer belongs in Bots.Business properties.
-4. The commands derive sender ID from `tgUpdate.message.from.id` or `tgUpdate.callback_query.from.id`, cross-check the private chat and runtime `user.telegramid`, and sign the exact JSON request bytes with runtime `CryptoJS.HmacSHA256`. Requests have a 60-second freshness window and durable event/callback validation behind the coordinator. Raw Telegram IDs in unauthenticated requests are never accepted.
-5. HTTP redirects are disabled. Responses are ignored: current Bots.Business HTTP transport does not verify TLS certificates, so a network attacker could read signed metadata or inject a response. The signing key is not sent. The backend sends menus directly via its TLS-verified Telegram API transport. HMAC prevents changing sender/action; it does not hide traffic metadata or prevent denial of service. There is no transmission of vault secrets over Bots.Business HTTP.
-6. Native menus include Home/Back, paging, explicit code disclosure and refresh, lock, and HTTPS forms for sensitive actions. Native search/add/import/edit/delete use Open Vault forms. Secrets never appear in callback data. Callbacks are opaque, one-use, short-lived, and bound to the current session hash and authentication generation.
-
-## Configure the Mini App
-
-After a production coordinator is available, configure the bot's Mini App/menu button in BotFather to your HTTPS root. Native backend menus use private-chat `web_app` inline buttons. Telegram's launch fragment `tgWebAppData` is read once, removed from browser history, and sent in a request header, never `initDataUnsafe`. The backend validates HMAC, unique fields, numeric sender, and freshness (5 minutes with 30 seconds clock skew). Reopen the Mini App when launch authorization expires. The launch protocol implementation still requires live verification against current Telegram docs/clients; no SDK or third-party analytics are loaded.
-
-Session tokens exist only in page memory. Reloading requires login. Browser security policy allows only bundled assets and same-origin connections. No external favicon requests disclose stored domains.
-
-## Import formats and preview
-
-Choose **Import**, upload, pick Skip / Update / Keep Both, and select **Validate & preview**. Confirm before committing. File/policy changes invalidate the preview. The server validates again inside the revision-checked transaction. Invalid row reasons do not echo input values. A bulk import makes one revision and one backup job.
-
-- Google Passwords CSV requires `name,url,username,password,note` in that order. `csv-parse` supports BOM, quoted commas/newlines and empty fields. Bad column counts are invalid rows; malformed quoting rejects the file. Input limit: 1 MiB, 5,000 rows, 40,000-character CSV record, plus per-field limits.
-- OneCloud JSON accepts `v:1` (or `"1"`), nonempty `app`, and `accounts`. Each account accepts issuer, account_name, secret, algorithm, digits, period and optional `type:"totp"`. Unsupported versions/fields are rejected. Base32 is canonicalized/validated. Algorithms: SHA1/SHA256/SHA512; digits: 6/8; period: integer 15–120 seconds. Missing algorithm/digits/period default to SHA1/6/30 in this project's v1 adapter. Existing parameters are preserved. Verify your particular exporter uses this v1 schema; no live OneCloud export was available.
-- Manual Base32 entry and `otpauth://totp` URIs are supported. HOTP is explicitly unsupported.
-
-Duplicates compare password normalized hostname + exact username, or TOTP case-normalized issuer + account. Different significant subdomains and different domains stay separate; `www.` is normalized. Keep Both assigns new UUIDs. Records never link automatically; select an explicit linked password in the 2FA editor.
-
-## Save, delivery and retry
-
-The local transaction first saves the encrypted current revision and a pending job. Each completed remote stage is persisted separately: document upload → manifest edit/create and pin → private-chat encrypted backup. A successful upload is not a successful publication. The UI shows **Vault saved**, **Channel pending/failed/published**, and **Private backup pending/failed/delivered** separately.
-
-A pending channel publication blocks another write. Private delivery failure does not roll back a saved/published vault. Select **Retry backup** to resume. Each request awaits at most three persisted stages; Telegram calls have eight-second timeouts. There is no detached work, permanent timer, or dependence on Vercel running after response. A future production implementation needs a durable scheduler for unattended retries; the current implementation retries only on an explicit request. A timeout/crash after a remote side effect but before recording its result can create duplicate Telegram documents/messages; Telegram offers no general idempotency key for these sends. Snapshot history is retained, including orphan uploads. No garbage collection silently removes backups.
-
-## Recovery and disaster recovery
-
-**A. Lost personal Telegram account, bot/channel still available:** open the Mini App with the replacement account, choose Rebind, enter vault username, master password and recovery key, then explicitly confirm revocation. Vault UUID and records remain. Authentication generation increments; old sessions and pending callback actions become invalid. Ordinary login cannot rebind. For a forgotten master password use the distinct Forgot password flow: username + recovery key + a new master password + revocation confirmation. This rewrites the password wrapper, saves a new encrypted revision, and revokes sessions.
-
-**B. Bot/channel/Telegram unavailable:** use a downloaded encrypted backup and recovery key. Neither method below requires Telegram initData, a bot token, the old Vercel environment or its server key.
-
-Browser recovery:
-
-1. Preserve `public/recovery.html`, `public/recovery.js` (generated by build), and `public/style.css` together before a disaster. The source delivery includes the generated files.
-2. Open `recovery.html` locally using a browser supporting Web Crypto in local files, select the backup and enter the recovery key. Decryption and schema validation happen only on the device; the recovery script contains no network requests. This environment's managed Chromium blocks file URLs; recovery was instead tested after static assets loaded, with networking disabled.
-3. Preview counts and download recovered plaintext JSON. The download link expires after one minute. Keep exports secure. Browsers that disallow local Web Crypto can use the CLI below, or serve these static files on loopback without internet.
-
-CLI recovery (install dependencies before going offline):
+Ten additional tests use **real PostgreSQL**, separate database connections and mocked Telegram transport. They deliberately reset the coordinator table; use a disposable local database only:
 
 ```sh
-npm ci
-npm run recover -- /path/to/vault.encrypted.json /path/to/recovered.json
+docker run --rm -d --name vault-pg-test \
+  -e POSTGRES_PASSWORD=synthetic-integration-only \
+  -e POSTGRES_DB=vault_test -p 127.0.0.1:55432:5432 postgres:17-alpine
+# Wait until pg_isready succeeds in the container.
+TEST_DATABASE_URL=postgresql://postgres:synthetic-integration-only@127.0.0.1:55432/vault_test npm run test:postgres
+docker stop vault-pg-test
 ```
 
-The CLI prompts for a hidden recovery key in a terminal, never an argument or URL. For automation, pipe a protected key file into stdin. It creates the output exclusively with mode 0600 and refuses to overwrite an existing file. The output contains plaintext passwords and TOTP seeds. Keep it secure, then remove it when no longer needed. All recovery credentials/data exist transiently in process memory; JavaScript cannot guarantee complete memory erasure.
+The integration constructor permits plaintext PostgreSQL only for explicit loopback tests. Production always verifies TLS certificates and hostnames; no environment toggle disables TLS. Tests cover concurrency, setup closure, idempotency, cold start, throttling, logout/expiry/rebind, partial remote failures, expired worker fencing, immutable publication and authenticated HTTP routes. They do not connect to Neon/Telegram/Vercel.
 
-To move to a new deployment, initialize a fresh vault/binding there once reliable storage is available, then use Backup & restore with the old downloaded encrypted backup and its recovery key. Authenticate and preview, choose Merge or Replace, explicitly confirm. Only records are imported: old usernames, bindings, sessions and callback actions never revive. Current Telegram snapshots provide pre-restore history where publication succeeded.
+## Minimal production setup
 
-A file that exists **only in Telegram is not an independent local backup**. Store regular downloaded copies and the recovery tools in another place. Logout cannot delete files already downloaded, clipboard contents, or previously delivered Telegram messages. Native-chat TOTP disclosure is explicit and can remain in history; password reveal/copy occurs in the web UI.
+1. Create a **Neon Free** project and run [sql/001-coordinator.sql](sql/001-coordinator.sql) in its SQL Editor. Copy a pooled connection URL from Connect.
+2. Set the private Vercel variables in `.env.example`: `STORAGE_MODE=postgres`, `DATABASE_URL`, `APP_ORIGIN`, `BOT_TOKEN`, `CHANNEL_ID`, `SERVER_KEY`, `SETUP_TOKEN`, `BB_FORWARD_SECRET`, `CRON_SECRET`, `SESSION_IDLE_SECONDS`. Generate each of the four hex secrets independently using `openssl rand -hex 32`.
+3. Install the four Bots.Business commands and the two bot-scoped String properties from the Bengali checklist. Keep Bots.Business as the bot update/webhook owner.
+4. Add the same bot as admin to a dedicated private channel (Post Messages + Edit Messages). Configure BotFather menu URL to the HTTPS root.
+5. Redeploy the latest source. `GET /api` checks the configured database and must report `mode:postgres`, `writesEnabled:true`. Wrong/missing state fails 503 rather than resetting registration.
+6. Inside Telegram use `/start` → Open Vault → `https://totpbot.vercel.app/?view=setup`; enter the private setup token, create one username/password, save the recovery key and acknowledge. The plain browser URL alone lacks Telegram initData.
+7. Run the synthetic import/backup/rebind/expiry acceptance checklist before importing actual credentials.
+
+`vercel.json` builds `public`, configures a 60-second Node function, no-store/security headers, `/api/bot` forwarding and an authenticated `/api/worker` daily cron. The cron is at 03:00 UTC (about 09:00 Asia/Dhaka, within Hobby's hourly scheduling window). Saves try immediate delivery; Retry backup resumes immediately. A daily cron is only the unattended fallback. Each invocation awaits up to three persisted stages and starts no further stage once its time budget expires; no detached promises continue after response. Worker invocations require `Authorization: Bearer CRON_SECRET`; Vercel supplies that header.
+
+## Local synthetic development
+
+Do not use local storage on Vercel. On one persistent machine, configure a private `.env`:
+
+```dotenv
+STORAGE_MODE=local-development
+APP_ORIGIN=http://127.0.0.1:3000
+SERVER_KEY=YOUR_64_RANDOM_HEX_CHARACTERS
+SETUP_TOKEN=YOUR_SEPARATE_64_RANDOM_HEX_CHARACTERS
+LOCAL_STATE_PATH=work/vault.local
+LOCAL_MOCK_TELEGRAM=true
+SESSION_IDLE_SECONDS=600
+```
+
+```sh
+npm run build
+node --env-file=.env --import tsx src/local.ts
+```
+
+Open `http://127.0.0.1:3000`. Local mode uses fixed synthetic actor `10001` and shows a simulation notice; no Telegram messages/files are sent. The encrypted local state has a single-process file lease and fsync/atomic rename. Stop cleanly to release the lease. After a crash, verify no process runs before manually removing `work/vault.local.lockfile`. Do not use this mode on shared storage/in a cluster. `api/index.ts` cannot select it.
+
+## Import and record semantics
+
+- Google Passwords CSV: exact header `name,url,username,password,note`, BOM, quoted multiline/comma fields and empty optionals. Malformed rows are counted with sanitized reasons; malformed quoting rejects the file. Max 1 MiB/5000 rows and 40000-character CSV record, with bounded fields.
+- OneCloud v1 adapter: root `v:1` or `"1"`, `app`, `accounts`. Each account supports `issuer`, `account_name`, Base32 `secret`, `algorithm`, `digits`, `period`, optional `type:totp`. SHA1/SHA256/SHA512; 6/8 digits; 15–120 seconds; missing parameters default to SHA1/6/30 in this adapter. Unsupported versions/fields/HOTP are rejected. No real exporter was supplied; confirm your export matches this schema before relying on it.
+- Manual Base32 and otpauth TOTP URI entry are supported. No HOTP.
+- Upload → detect/validate → preview counts/errors/duplicates/new/updated → Skip/Update/Keep Both → confirm → one revision and one backup job. The server validates again under serialization.
+- Password duplicates use normalized hostname + exact username; TOTP duplicates use case-normalized issuer/account. Meaningful subdomains/domains stay distinct; www is normalized. No automatic password/2FA name linking. Explicit links survive restore-merge UUID remapping; deletion removes orphan links.
+
+## Backup, restore and recovery
+
+Backups use random 256-bit DEKs, AES-GCM, scrypt password wrapping and a separate random recovery-key wrapper. They are self-contained. The backend receives passwords and decrypts during authorized requests; **this is not zero-knowledge**. Key material between requests is wrapped under SERVER_KEY; session hashes/generation and expiry are checked server-side every time.
+
+The transaction saves the intended revision + outbox first; document upload, immutable signed manifest publication, and private encrypted backup delivery have separate persisted status. A failed channel publication blocks the next mutation; private delivery failure stays independent. Retry uses durable stage ownership. Network ambiguity can duplicate encrypted sends/manifests; there is no exactly-once claim. Fenced late receipts cannot regress the published pointer or resurrect a binding. A Telegram message/file already in flight may still arrive; logout cannot erase delivered history, downloads or clipboard contents.
+
+Download an encrypted backup outside Telegram using Backup & restore. A file only in Telegram is **not** an independent backup. Keep the recovery key separately. Browser offline recovery requires `public/recovery.html`, `recovery.js`, `style.css` together; it authenticates/decrypts locally and exports validated plaintext JSON without networking. Local file navigation was blocked in the managed test browser, so its recovery was tested after static loading with networking disabled. Browser policy permitting local Web Crypto is required; otherwise use the CLI:
+
+```sh
+npm ci # do this before going offline
+npm run recover -- /path/vault.encrypted.json /path/recovered.json
+```
+
+The terminal prompt hides the recovery key; automation can supply a protected key file through stdin. The CLI never takes a key in argv/URLs and creates output exclusively with mode 0600. Export contains plaintext credentials; protect it and remove it after use.
+
+Account lost but Telegram/bot available: new account Starts the same bot, then uses Rebind with username/master password/recovery key and explicit old binding/session revocation. Forgotten password is a separate recovery-key + new-password flow. Telegram/database unavailable: use a downloaded backup offline, or initialize a new deployment/vault and use authenticated preview → Merge/Replace → confirm. Restore copies records, not old identity/bindings/sessions. Download current backup before Replace; old channel documents remain as history.
+
+Do not reset/reseed live coordinator state, silently restore an old database row, rotate SERVER_KEY without a migration, or point Preview deployments at the production state. Wrong keys/database outage fail closed; downloaded backups remain recoverable without the old environment.

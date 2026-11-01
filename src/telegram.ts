@@ -1,6 +1,25 @@
 import { createHmac } from "node:crypto";
 import { equal, digest, type Backup } from "./crypto.js";
 import { requireThat } from "./model.js";
+export function isChannelId(value: string) {
+  if (!/^-\d{1,16}$/.test(value)) return false;
+  const id = BigInt(value);
+  return id >= -1997852516352n && id <= -1000000000001n;
+}
+export function channelIdFromLink(value: string) {
+  const u = new URL(value),
+    match = u.pathname.match(/^\/c\/(\d+)\/\d+/);
+  requireThat(
+    u.protocol === "https:" &&
+      ["t.me", "telegram.me"].includes(u.hostname) &&
+      match,
+    400,
+    "Use a private channel message link, not an invite link",
+  );
+  const id = BigInt(match[1]);
+  requireThat(id >= 1n && id <= 997852516352n, 400, "Invalid channel ID");
+  return String(-(1000000000000n + id));
+}
 export function validateInitData(raw: string, token: string, now = Date.now()) {
   requireThat(raw.length <= 12000, 401, "Invalid Telegram authorization");
   const p = new URLSearchParams(raw),
@@ -17,7 +36,7 @@ export function validateInitData(raw: string, token: string, now = Date.now()) {
   }
   p.delete("hash");
   const data = [...p]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
   const secret = createHmac("sha256", "WebAppData").update(token).digest();
@@ -39,7 +58,7 @@ export function validateInitData(raw: string, token: string, now = Date.now()) {
     throw Error("Invalid Telegram user");
   }
   requireThat(
-    Number.isSafeInteger(user.id) && user.id > 0,
+    user && Number.isSafeInteger(user.id) && user.id > 0,
     401,
     "Invalid Telegram user",
   );
@@ -53,6 +72,7 @@ export interface Transport {
     manifestMessage?: number,
   ): Promise<number>;
   deliver(b: Backup, actor: string): Promise<void>;
+  pin?(message: number): Promise<void>;
   menu(
     actor: string,
     text: string,
@@ -138,23 +158,18 @@ export class Telegram implements Transport {
         manifest,
         mac: createHmac("sha256", this.manifestKey).update(body).digest("hex"),
       });
-    let id = message;
-    if (id) {
-      await this.call("editMessageText", {
-        chat_id: this.channel,
-        message_id: id,
-        text,
-      });
-    } else {
-      id = (await this.call("sendMessage", { chat_id: this.channel, text }))
-        .message_id;
-    }
+    const result = await this.call("sendMessage", {
+      chat_id: this.channel,
+      text,
+    });
+    return result.message_id as number;
+  }
+  async pin(message: number) {
     await this.call("pinChatMessage", {
       chat_id: this.channel,
-      message_id: id,
+      message_id: message,
       disable_notification: true,
     });
-    return id!;
   }
   async deliver(b: Backup, actor: string) {
     await this.document(b, actor);
@@ -167,7 +182,11 @@ export class Telegram implements Transport {
       reply_markup: { inline_keyboard: keyboard },
     });
   }
-  async discover() {
+  async discover(expected?: {
+    revision: number;
+    sha256: string;
+    vaultId: string;
+  }) {
     const chat = await this.call("getChat", { chat_id: this.channel });
     const text = chat.pinned_message?.text;
     requireThat(
@@ -185,6 +204,14 @@ export class Telegram implements Transport {
       ),
       409,
       "Invalid manifest signature",
+    );
+    requireThat(
+      expected &&
+        manifest.revision === expected.revision &&
+        manifest.sha256 === expected.sha256 &&
+        manifest.vaultId === expected.vaultId,
+      409,
+      "Pinned hint is stale; use the coordinator's authoritative reference",
     );
     return manifest;
   }

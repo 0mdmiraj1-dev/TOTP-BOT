@@ -60,6 +60,7 @@ test("HTTP rejects unverified sender, cross-origin calls and fails closed on fre
         .status,
       401,
     );
+    assert.equal((await fetch(base + "/api?route=worker")).status, 401);
     const health = await (await fetch(base + "/api")).json();
     assert.equal(health.writesEnabled, false);
   } finally {

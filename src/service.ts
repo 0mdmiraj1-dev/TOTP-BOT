@@ -22,7 +22,13 @@ import {
 } from "./model.js";
 import { normalizeSecret, parseOtpUri, totp } from "./totp.js";
 import { inspectImport } from "./import.js";
-import type { Coordinator, State, Session } from "./store.js";
+import {
+  pruneSecurity,
+  type Coordinator,
+  type State,
+  type Session,
+} from "./store.js";
+import { Outbox, enqueue } from "./outbox.js";
 import type { Transport } from "./telegram.js";
 export type Context = { actor?: string; session?: string };
 const strong = (p: unknown) =>
@@ -138,6 +144,7 @@ export class VaultService {
     s.sessions = {};
     s.callbacks = {};
     s.prepared = undefined;
+    for (const job of s.jobs) delete job.lease;
   }
   private async commit(
     s: State,
@@ -165,14 +172,15 @@ export class VaultService {
       413,
       "Encrypted vault size limit exceeded",
     );
+    enqueue(s, b);
     s.account!.backup = b;
-    s.jobs.push({ backup: b, published: false, delivered: false });
     return b.revision;
   }
   async request(action: string, body: any, c: Context): Promise<any> {
     // Every protected operation uses the same durable transaction as auth checks.
     if (action === "retry") return this.retry(c);
     const result: any = await this.db.run(async (s) => {
+      pruneSecurity(s, this.clock());
       if (action === "setup") {
         requireThat(!s.account, 409, "Setup is permanently disabled");
         requireThat(
@@ -283,12 +291,7 @@ export class VaultService {
         );
         s.account!.ack = true;
         session.setup = false;
-        if (!s.jobs.length)
-          s.jobs.push({
-            backup: s.account!.backup,
-            published: false,
-            delivered: false,
-          });
+        if (!s.jobs.length) enqueue(s, s.account!.backup);
         return { acknowledged: true };
       }
       if (action === "logout") {
@@ -298,6 +301,7 @@ export class VaultService {
         return { locked: true };
       }
       if (action === "status") return this.status(s);
+      if (action === "manifest") return { reference: s.published ?? null };
       if (action === "callback") {
         const cb = s.callbacks[String(body.id)];
         requireThat(
@@ -372,7 +376,7 @@ export class VaultService {
         requireThat(
           Object.keys(s.idempotency).length < 10000,
           409,
-          "Development idempotency capacity reached",
+          "Idempotency capacity reached",
         );
         requireThat(
           body.revision === s.account!.backup.revision,
@@ -512,6 +516,11 @@ export class VaultService {
     const j = s.jobs.at(-1);
     return {
       vaultSaved: !!s.account?.ack,
+      publishedRevision: s.published?.revision,
+      pendingBackups: s.jobs.filter((j) => !j.delivered).length,
+      pendingPublications: s.jobs.filter((j) => !j.published).length,
+      pin: j?.pinError ? "failed" : "advisory",
+      busy: !!j?.lease && j.lease.until > this.clock(),
       revision: s.account?.backup.revision,
       channel: j?.published
         ? "published"
@@ -527,57 +536,24 @@ export class VaultService {
     };
   }
   async retry(c: Context) {
-    // Persist each completed stage separately. Single development process queue ensures
-    // no competing effects; network ambiguity may duplicate sends, never claim exactly-once.
-    for (let step = 0; step < 3; step++) {
-      const progress = await this.db.run(async (s) => {
-        this.session(s, c);
-        const job = s.jobs.find((j) => !j.published || !j.delivered);
-        if (!job) return false;
-        if (!job.uploaded) {
-          try {
-            job.uploaded = await this.transport.upload(job.backup);
-            job.uploadError = false;
-          } catch {
-            job.uploadError = true;
-            return false;
-          }
-          return true;
-        }
-        if (!job.published) {
-          try {
-            s.manifestMessage = await this.transport.publish(
-              job.backup,
-              job.uploaded,
-              s.manifestMessage,
-            );
-            job.published = true;
-            job.publicationError = false;
-          } catch {
-            job.publicationError = true;
-            return false;
-          }
-          return true;
-        }
-        if (!job.delivered) {
-          try {
-            await this.transport.deliver(job.backup, s.account!.binding);
-            job.delivered = true;
-            job.deliveryError = false;
-          } catch {
-            job.deliveryError = true;
-            return false;
-          }
-          return true;
-        }
-        return false;
-      });
-      if (!progress) break;
-    }
+    await new Outbox(this.db, this.transport, this.clock).drain((s) => {
+      this.session(s, c);
+    });
     return this.db.run((s) => {
       this.session(s, c);
       return this.status(s);
     });
+  }
+  async work() {
+    await new Outbox(this.db, this.transport, this.clock).drain();
+    return { processed: true };
+  }
+  async health() {
+    return this.db.run((s) => ({
+      initialized: !!s.account,
+      setupComplete: !!s.account?.ack,
+      publishedRevision: s.published?.revision,
+    }));
   }
   async bot(actor: string, message?: number) {
     return this.db.run(async (s) => {

@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { equal, open, decrypt } from "./crypto.js";
 import { requireThat } from "./model.js";
 import { totp } from "./totp.js";
-import type { Coordinator, State } from "./store.js";
+import { pruneSecurity, type Coordinator, type State } from "./store.js";
 import type { Transport } from "./telegram.js";
 const choices = [
   "Passwords",
@@ -69,9 +69,24 @@ export class BotRouter {
     private serverKey: Buffer,
     private origin: string,
     private clock = () => Date.now(),
+    private idle = 600000,
   ) {}
   async handle(p: ReturnType<typeof verifyForward>) {
-    return this.db.run(async (s) => {
+    const effect = await this.db.run(async (s) => {
+      pruneSecurity(s, this.clock());
+      const menu = async (
+        actor: string,
+        text: string,
+        keyboard: unknown,
+        message?: number,
+      ) => ({
+        actor,
+        text,
+        keyboard,
+        message,
+        generation: s.account?.generation,
+        sessionHash: entry && s.sessions[entry[0]] ? entry[0] : undefined,
+      });
       const a = s.account;
       const entry = Object.entries(s.sessions).find(
         ([, t]) =>
@@ -87,7 +102,8 @@ export class BotRouter {
         {
           text: "Open Vault",
           web_app: {
-            url: this.origin + (view ? "#" + encodeURIComponent(view) : ""),
+            url:
+              this.origin + (view ? "?view=" + encodeURIComponent(view) : ""),
           },
         },
       ];
@@ -96,20 +112,20 @@ export class BotRouter {
       requireThat(
         Object.keys(s.idempotency).length < 10000,
         429,
-        "Development event capacity reached",
+        "Event capacity reached",
       );
       s.idempotency[replay] = {
         hash: "bot",
+        expires: this.clock() + 60000,
         revision: a?.backup.revision ?? 0,
       };
       if (!entry) {
-        await this.tg.menu(
+        return menu(
           p.actor,
           "Vault locked. Open Vault to sign in securely. A new Telegram account must use Rebind.",
-          [openButton()],
+          [openButton(a ? "" : "setup")],
           p.message,
         );
-        return;
       }
       const [sessionHash, session] = entry;
       const token = (action: string) => {
@@ -136,29 +152,27 @@ export class BotRouter {
           cb.generation !== a!.generation ||
           cb.expires <= this.clock()
         ) {
-          await this.tg.menu(
+          return menu(
             p.actor,
             "Button expired. Send /start or reopen the vault.",
             [openButton()],
             p.message,
           );
-          return;
         }
         action = cb.action;
         delete s.callbacks[p.callback!];
       }
-      session.expires = Math.min(session.absolute, this.clock() + 600000);
+      session.expires = Math.min(session.absolute, this.clock() + this.idle);
       if (action === "Lock / Logout") {
         delete s.sessions[sessionHash];
         for (const [id, c] of Object.entries(s.callbacks))
           if (c.session === sessionHash) delete s.callbacks[id];
-        await this.tg.menu(
+        return menu(
           p.actor,
           "Vault locked. Previously delivered messages and files remain in Telegram.",
           [openButton()],
           p.message,
         );
-        return;
       }
       let text = "Personal Vault",
         rows: any[] = [];
@@ -195,17 +209,15 @@ export class BotRouter {
           text = `${type === "totp" ? "2FA" : "Passwords"} · ${page + 1}/${pages}`;
           if (!records.length)
             text += "\nNo records yet. Add one in Open Vault.";
-          rows = records
-            .slice(page * 6, page * 6 + 6)
-            .map((r) => [
-              {
-                text: (r.type === "password"
-                  ? r.name + " · " + r.username
-                  : r.issuer + " · " + r.account
-                ).slice(0, 60),
-                callback_data: token("record:" + r.id),
-              },
-            ]);
+          rows = records.slice(page * 6, page * 6 + 6).map((r) => [
+            {
+              text: (r.type === "password"
+                ? r.name + " · " + r.username
+                : r.issuer + " · " + r.account
+              ).slice(0, 60),
+              callback_data: token("record:" + r.id),
+            },
+          ]);
           if (page > 0)
             rows.push([
               {
@@ -271,7 +283,24 @@ export class BotRouter {
         429,
         "Too many pending buttons; wait five minutes",
       );
-      await this.tg.menu(p.actor, text, rows, p.message);
+      return menu(p.actor, text, rows, p.message);
     });
+    if (!effect) return;
+    // Recheck generation before dispatch. A message already in flight cannot be
+    // recalled, but revoked callbacks/sessions never authorize a new dispatch.
+    const current = await this.db.run(
+      (s) =>
+        s.account?.generation === effect.generation &&
+        (!effect.sessionHash ||
+          (!!s.sessions[effect.sessionHash] &&
+            s.sessions[effect.sessionHash].expires > this.clock())),
+    );
+    if (current)
+      await this.tg.menu(
+        effect.actor,
+        effect.text,
+        effect.keyboard,
+        effect.message,
+      );
   }
 }

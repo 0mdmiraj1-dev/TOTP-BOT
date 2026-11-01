@@ -304,6 +304,7 @@ test("Private backup delivery failure is separate from commit and publication", 
   const d = await f.service.request("save", saveBody(0), f.c);
   assert.equal(d.channel, "published");
   assert.equal(d.backup, "failed");
+  assert.equal(d.pendingBackups, 1);
   const uploads = f.tg.uploads;
   f.tg.failDelivery = false;
   assert.equal((await f.service.request("retry", {}, f.c)).backup, "delivered");
@@ -348,7 +349,8 @@ test("Bulk import one revision and backup; restore does not revive identity or s
   assert.equal(f.db.state.account!.binding, "10001");
   assert.equal(f.db.state.account!.generation, gen);
   assert.equal((await f.service.request("list", {}, f.c)).records.length, 0);
-  assert.equal(f.db.state.jobs.length, 3);
+  assert.equal(f.db.state.jobs.length, 1);
+  assert.equal(f.db.state.history?.length, 3);
 });
 test("Fail-closed production survives cold instances and concurrent requests", async () => {
   const s = () =>

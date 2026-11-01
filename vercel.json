@@ -11,6 +11,10 @@
     {
       "source": "/api/bot",
       "destination": "/api?route=bot"
+    },
+    {
+      "source": "/api/worker",
+      "destination": "/api?route=worker"
     }
   ],
   "headers": [
@@ -34,6 +38,12 @@
           "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors https://web.telegram.org https://*.telegram.org"
         }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/worker",
+      "schedule": "0 3 * * *"
     }
   ]
 }

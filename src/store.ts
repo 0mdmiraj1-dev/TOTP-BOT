@@ -17,6 +17,16 @@ export type Session = {
   setup?: boolean;
 };
 export type Job = {
+  id?: string;
+  manifestMessage?: number;
+  pinError?: boolean;
+  lease?: {
+    token: string;
+    until: number;
+    generation: number;
+    actor: string;
+    stage: "upload" | "publish" | "deliver";
+  };
   backup: Backup;
   uploaded?: { fileId: string; messageId: number };
   published: boolean;
@@ -45,10 +55,27 @@ export type State = {
       expires: number;
     }
   >;
-  idempotency: Record<string, { hash: string; revision: number }>;
+  idempotency: Record<
+    string,
+    { hash: string; revision: number; expires?: number }
+  >;
   jobs: Job[];
   manifestMessage?: number;
   prepared?: Backup;
+  published?: {
+    revision: number;
+    vaultId: string;
+    fileId: string;
+    manifestMessage: number;
+    sha256: string;
+  };
+  history?: {
+    revision: number;
+    fileId: string;
+    manifestMessage: number;
+    sha256: string;
+    created: string;
+  }[];
 };
 export const empty = (): State => ({
   sessions: {},
@@ -145,5 +172,22 @@ export class LocalCoordinator implements Coordinator {
       () => {},
     );
     return task;
+  }
+}
+
+export function pruneSecurity(s: State, now: number) {
+  for (const [id, t] of Object.entries(s.sessions))
+    if (
+      t.expires <= now ||
+      t.absolute <= now ||
+      t.generation !== s.account?.generation
+    )
+      delete s.sessions[id];
+  for (const [id, c] of Object.entries(s.callbacks))
+    if (c.expires <= now || !s.sessions[c.session]) delete s.callbacks[id];
+  for (const [id, v] of Object.entries(s.idempotency)) {
+    if (id.startsWith("bot:")) {
+      if (v.expires !== undefined && v.expires <= now) delete s.idempotency[id];
+    } else if (!s.sessions[id.split(":")[0]]) delete s.idempotency[id];
   }
 }

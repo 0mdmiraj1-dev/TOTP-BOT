@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
+import { equal } from "./crypto.js";
 import { Fault, requireThat } from "./model.js";
 import { validateInitData } from "./telegram.js";
 import { verifyForward } from "./bot.js";
@@ -26,15 +27,42 @@ export async function handler(
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Content-Type", "application/json");
   try {
+    const route = new URL(req.url ?? "/", "http://localhost");
+    if (
+      route.pathname === "/api/worker" ||
+      route.searchParams.get("route") === "worker"
+    ) {
+      requireThat(
+        req.method === "GET" || req.method === "POST",
+        405,
+        "GET or POST required",
+      );
+      const secret = process.env.CRON_SECRET ?? "";
+      requireThat(
+        secret.length >= 64 &&
+          equal(String(req.headers.authorization ?? ""), "Bearer " + secret),
+        401,
+        "Worker authorization required",
+      );
+      const result = await runtime.service.work();
+      res.end(JSON.stringify(result));
+      return;
+    }
     if (req.method === "GET") {
+      const configured = runtime.local || !!runtime.production;
+      const state = configured ? await runtime.service.health() : {};
       res.end(
         JSON.stringify({
-          mode: runtime.local ? "local-development" : "experimental-channel",
-          writesEnabled: runtime.local,
+          mode:
+            runtime.mode ??
+            (runtime.local ? "local-development" : "experimental-channel"),
+          writesEnabled: configured,
           simulatedTelegram: runtime.simulatedTelegram,
-          blocker: runtime.local
+          ...state,
+          missing: runtime.missing?.length ? runtime.missing : undefined,
+          blocker: configured
             ? undefined
-            : "Durable production coordinator not configured",
+            : "Coordinator configuration incomplete",
           localIdentity: runtime.local ? "10001" : undefined,
         }),
       );
@@ -93,12 +121,15 @@ export async function handler(
     res.statusCode = status;
     res.end(
       JSON.stringify({
+        ...(req.method === "GET"
+          ? { writesEnabled: false, mode: runtime.mode }
+          : {}),
         error:
           error instanceof Fault
             ? error.message
             : status === 400
               ? "Invalid input or encrypted data authentication failed"
-              : "Request failed",
+              : "Request failed; retry with the same request ID",
       }),
     );
   }
